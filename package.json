@@ -1,0 +1,48 @@
+{
+  "name": "@spytrend/facebook-ads-library-mcp",
+  "version": "1.0.0",
+  "description": "MCP server adapter for the Facebook / Meta ads library: search ads and creatives, find advertisers behind them, pull media — from your AI assistant. Hosted by Spytrend, 170M+ new Meta ads a month.",
+  "type": "module",
+  "bin": {
+    "facebook-ads-library-mcp": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20.18.1"
+  },
+  "dependencies": {
+    "mcp-remote": "0.14.3"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Spytrend/facebook-ads-library-mcp"
+  },
+  "homepage": "https://spytrend.com/mcp/?utm_source=github-facebook-ads-library-mcp&utm_medium=repo&utm_campaign=mcp-launch",
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "facebook-ads",
+    "facebook-ads-library",
+    "meta-ads",
+    "meta-ad-library",
+    "ad-library",
+    "advertising",
+    "ad-analytics",
+    "marketing-analytics",
+    "competitive-analysis",
+    "claude",
+    "cursor",
+    "chatgpt",
+    "ai-assistant-tools"
+  ],
+  "scripts": {
+    "test": "node --test --test-timeout=30000"
+  }
+}
