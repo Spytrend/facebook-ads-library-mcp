@@ -92,7 +92,7 @@ const SERVER_WORDS = [
   ...RENAMED
 ];
 const SERVER_TERMS = (adapterConfig.vocabulary ?? []).map(([term]) => term.toLowerCase());
-const IDENTITY = { name: REPO, version: "1.0.0" };
+const IDENTITY = { name: REPO, version: "1.0.1" };
 
 function assertNoServerWords(text, where) {
   for (const word of SERVER_WORDS) {
@@ -250,13 +250,13 @@ test("--list-tools and --version work without a network connection", async () =>
   assert.deepEqual(listed.tools.map((tool) => tool.name), Object.keys(EXPECTED_TOOLS));
   for (const tool of listed.tools) assert.equal(tool.title, adapterConfig.tools[tool.name].title);
   const version = (await run(process.execPath, ["index.js", "--version"], { cwd: root })).stdout.trim();
-  assert.equal(version, "1.0.0");
+  assert.equal(version, "1.0.1");
 });
 
 test("the package installs as a command from GitHub", async () => {
   const pkg = JSON.parse(await readFile(new URL("package.json", root), "utf8"));
   assert.equal(pkg.name, `@spytrend/${REPO}`);
-  assert.equal(pkg.version, "1.0.0");
+  assert.equal(pkg.version, "1.0.1");
   assert.equal(pkg.private, undefined);
   assert.deepEqual(pkg.bin, { [REPO]: "./index.js" });
   assert.equal(pkg.license, "MIT");
@@ -264,7 +264,9 @@ test("the package installs as a command from GitHub", async () => {
   assert.ok(pkg.homepage.includes(`utm_source=github-${REPO}&utm_medium=repo&utm_campaign=mcp-launch`));
   const index = await readFile(new URL("index.js", root), "utf8");
   assert.ok(index.startsWith("#!/usr/bin/env node\n"));
-  assert.match(await readFile(new URL("CHANGELOG.md", root), "utf8"), /## \[1\.0\.0\]/);
+  const changelog = await readFile(new URL("CHANGELOG.md", root), "utf8");
+  assert.match(changelog, /## \[1\.0\.1\] — 2026-10-05/);
+  assert.match(changelog, /## \[1\.0\.0\] — 2026-10-05/);
   assert.match(await readFile(new URL("LICENSE", root), "utf8"), /Copyright \(c\) 2026 Spytrend/);
 });
 
@@ -362,7 +364,7 @@ test("initialize answers with the adapter's own identity, capabilities and instr
   const { result } = await toClient.next();
 
   assert.equal(result.protocolVersion, "2025-06-18");
-  assert.deepEqual(result.serverInfo, { name: REPO, title: adapterConfig.title, version: "1.0.0" });
+  assert.deepEqual(result.serverInfo, { name: REPO, title: adapterConfig.title, version: "1.0.1" });
   assert.deepEqual(result.capabilities, { logging: {}, tools: { listChanged: true } });
   assert.equal(result.instructions, adapterConfig.instructions);
   assertNoServerWords(result.instructions, "instructions");
@@ -495,9 +497,104 @@ test("hidden filters are refused under every spelling the server would accept", 
   }
 });
 
+// Tool results as the hosted server sends them: structuredContent mirrored as JSON into the text
+// block, error text both in content and in structuredContent.error, hints and codes in _meta.
+const answer = (structured, meta) => ({
+  result: { content: [{ type: "text", text: JSON.stringify(structured) }], structuredContent: structured, _meta: meta }
+});
+const refusal = (message, { outcome, code, kind }) => ({
+  result: {
+    isError: true,
+    content: [{ type: "text", text: message }],
+    structuredContent: { error: { code, outcome, kind, retryable: false, message } },
+    _meta: { "spytrend/outcome": outcome, "spytrend/error_code": code }
+  }
+});
+
+// Server answers shaped like the hosted server's (field names and texts from its code) for each
+// place where its internal naming reaches a result of this adapter's tools.
+const AD_ROW = {
+  id: "5f0c7c1e-4d0b-4a51-9a51-2b1f4f0f6a10",
+  title: "Collagen gummies",
+  landing_domain: "shop.example.com",
+  advertiser_id: "104857600123",
+  countries: ["DE", "AT"],
+  days_active: 12,
+  creative_id: "9a7e3d52-1c4b-4f7e-8d0e-6b5c2a1f0e33"
+};
+const SERVER_AD_ROW = {
+  ...AD_ROW,
+  webmaster_id: "3c1d9a0e-7b2f-4e8a-9c6d-5f4e3b2a1c0d",
+  webmasters: [{ id: "3c1d9a0e-7b2f-4e8a-9c6d-5f4e3b2a1c0d", name: "shop.example.com", matched_by: "pixel" }]
+};
+const SECTION = { status: "ready", ready: true, denominator: 1200, available_count: 1, returned_count: 1, truncated: false };
+const ADVERTISER_ROW = { dimension: "advertisers", key: "104857600123", label: "Glow Labs", count: 310 };
+const ANALYTICS_REFUSAL =
+  "get_ads_analytics requires a Pro-or-higher spytrend plan. Upgrade at https://spytrend.com/pricing; no analytics quota was charged.";
+const RECORDED = [
+  {
+    tool: "search_facebook_ads",
+    args: { query: "collagen gummies", colour: "red" },
+    answer: answer(
+      {
+        data: [SERVER_AD_ROW],
+        pagination: { limit: 10, has_more: false },
+        params: {
+          applied: ["query", "source"],
+          normalized: [],
+          ignored: [{ param: "colour", action: "ignored", reason: "unknown parameter for search_ads" }]
+        }
+      },
+      { "spytrend/next_step": "Meta ads carry no media. Check opening_price, then use get_ad or get_media. For exact advertiser counts use get_advertiser." }
+    ),
+    expect: ({ result }) => {
+      assert.deepEqual(result.structuredContent.data, [AD_ROW]);
+      assert.deepEqual(result.structuredContent.params.applied, ["query"]);
+      assert.equal(result.structuredContent.params.ignored[0].reason, "unknown parameter for search_facebook_ads");
+      assert.equal(result._meta, undefined);
+    }
+  },
+  {
+    tool: "get_facebook_ad",
+    args: { id: AD_ROW.id },
+    answer: answer({ data: SERVER_AD_ROW }, { "spytrend/next_step": "find_similar_ads lists every ad re-using this creative. get_advertiser opens the advertiser behind it." }),
+    expect: ({ result }) => assert.deepEqual(result.structuredContent, { data: AD_ROW })
+  },
+  {
+    tool: "find_similar_facebook_ads",
+    args: { ad_id: AD_ROW.id },
+    answer: answer({ data: [SERVER_AD_ROW], params: { applied: ["ad_id"], normalized: [], ignored: [] } }),
+    expect: ({ result }) => assert.deepEqual(result.structuredContent.data, [AD_ROW])
+  },
+  {
+    tool: "get_facebook_ads_analytics",
+    args: { query: "collagen gummies" },
+    answer: answer({
+      tier: "pro",
+      total: 1200,
+      total_status: "exact",
+      advertisers: SECTION,
+      webmasters: SECTION,
+      data: [ADVERTISER_ROW, { dimension: "webmasters", key: "3c1d9a0e-7b2f-4e8a-9c6d-5f4e3b2a1c0d", label: "shop.example.com", count: 280 }],
+      params: { applied: ["query"], normalized: [], ignored: [] }
+    }),
+    expect: ({ result }) => {
+      assert.equal(result.structuredContent.total, 1200);
+      assert.deepEqual(result.structuredContent.advertisers, SECTION);
+      assert.deepEqual(result.structuredContent.data, [ADVERTISER_ROW]);
+    }
+  },
+  {
+    tool: "get_facebook_ads_analytics",
+    args: { query: "collagen gummies" },
+    answer: refusal(ANALYTICS_REFUSAL, { outcome: "forbidden", code: "plan_upgrade_required", kind: "permission_denied" }),
+    expect: ({ result }) => assert.equal(result.content[0].text, ANALYTICS_REFUSAL.replace("get_ads_analytics", "get_facebook_ads_analytics"))
+  }
+];
+
 // The hosted server calls its advertiser entities by a word this product does not use. It stays in code
 // (server names the adapter must send) and never in anything a user, or the assistant, can read.
-test("no server word «webmaster» in anything a user can read", async () => {
+test("no server word «webmaster» in anything a user can read", async (t) => {
   const WORD = /webmaster/i;
   const checked = [];
   const check = (text, where) => {
@@ -565,7 +662,246 @@ test("no server word «webmaster» in anything a user can read", async () => {
   refusals.push(notProvided.reply.error.message);
   assert.ok(refusals.length >= 4, "the refusal scan saw too little");
   check(refusals, "refusal and error messages");
+
+  // Tool results: answers shaped like the hosted server's pass through the bridge. No server word,
+  // pixel or IP name is left in content text, structuredContent or _meta, and errors stay errors.
+  const callClient = { input: new PassThrough(), output: new PassThrough() };
+  const callServer = { input: new PassThrough(), output: new PassThrough() };
+  const toCallServer = lines(callServer.input);
+  const toCallClient = lines(callClient.output);
+  createBridge({ config: adapterConfig, client: callClient, upstream: callServer, identity: IDENTITY, log: () => {} });
+  callClient.input.write(JSON.stringify({ jsonrpc: "2.0", id: "list", method: "tools/list" }) + "\n");
+  await toCallServer.next();
+  callServer.output.write(JSON.stringify({ jsonrpc: "2.0", id: "list", result: { tools: SERVER_TOOLS } }) + "\n");
+  await toCallClient.next();
+  const assertClean = (value, where) => {
+    const leaked = JSON.stringify(value).match(/.{0,50}(?:webmaster|pixel_id|resolved_ip).{0,50}/i);
+    assert.ok(!leaked, `${where}: a server-internal name reaches the user: …${leaked?.[0]}…`);
+  };
+  let callId = 100;
+  for (const recorded of RECORDED) {
+    callClient.input.write(JSON.stringify(call(recorded.tool, recorded.args, ++callId)) + "\n");
+    const forwarded = await toCallServer.next();
+    callServer.output.write(JSON.stringify({ jsonrpc: "2.0", id: callId, ...recorded.answer }) + "\n");
+    const reply = await toCallClient.next();
+    const where = `${recorded.tool} ${JSON.stringify(recorded.args)}`;
+    assertClean(reply, where);
+    check(reply, `${where} result`);
+    if (reply.error) {
+      assert.equal(reply.error.code, recorded.answer.error.code, where);
+      assert.match(reply.error.message, /[a-z]{3,} [a-z]{3,}/i, where);
+    } else if (reply.result.isError) {
+      assert.match(reply.result.content[0].text, /[a-z]{3,} [a-z]{3,}/i, where);
+      assert.equal(reply.result.structuredContent.error.message, reply.result.content[0].text, where);
+    } else if ("structuredContent" in reply.result) {
+      // The text block still carries the same JSON as structuredContent.
+      assert.deepEqual(JSON.parse(reply.result.content[0].text), reply.result.structuredContent, where);
+    }
+    recorded.expect(reply, forwarded.params.arguments);
+  }
+
+  // A server field no list names yet is dropped as well, unless the tool keeps it by name.
+  for (const [name, spec] of Object.entries(adapterConfig.tools)) {
+    const kept = Object.fromEntries((spec.keepFields ?? []).map((field) => [field, ["kept"]]));
+    const row = { id: "r1", total_ads: 3, new_webmaster_score: 1, ads_with_pixel: 2, resolved_ip_country: "DE", ...kept };
+    const { structuredContent } = transformToolResult({ structuredContent: { data: [row] } }, spec);
+    assert.deepEqual(structuredContent.data, [{ id: "r1", total_ads: 3, ...kept }], name);
+  }
+
+  // Review findings, each checked on the same bridge.
+  const UNAVAILABLE = "This parameter or option is not available in this adapter.";
+  const askRaw = async (serverAnswer, tool = PINNED[0], args = SAMPLE_ARGS) => {
+    callClient.input.write(JSON.stringify(call(tool, args, ++callId)) + "\n");
+    await toCallServer.next();
+    callServer.output.write(JSON.stringify({ jsonrpc: "2.0", id: callId, ...serverAnswer }) + "\n");
+    const reply = await toCallClient.next();
+    assert.equal(reply.id, callId);
+    return reply;
+  };
+  const ask = async (serverAnswer, tool = PINNED[0], args = SAMPLE_ARGS) => {
+    const reply = await askRaw(serverAnswer, tool, args);
+    assertClean(reply, tool);
+    return reply;
+  };
+
+  await t.test("an error whose every sentence names something internal becomes a neutral message", { timeout: 10000 }, async () => {
+    const internal = "pixel_id must be numeric. Use resolved_ip only with countries.";
+    const { result } = await ask(refusal(internal, { outcome: "arg_error", code: "invalid_arguments", kind: "invalid_argument" }));
+    assert.equal(result.isError, true);
+    assert.equal(result.content[0].text, UNAVAILABLE);
+    assert.equal(result.structuredContent.error.message, UNAVAILABLE);
+    const { error } = await ask({ error: { code: -32602, message: "find_similar_webmasters needs a webmaster id." } });
+    assert.equal(error.code, -32602);
+    assert.equal(error.message, UNAVAILABLE);
+  });
+
+  await t.test("a JSON list in a text block is cleaned like structuredContent", { timeout: 10000 }, async () => {
+    const rows = [{ id: "r1", total_ads: 3, webmaster_id: "w1", webmasters: [{ id: "w1", matched_by: "pixel" }] }];
+    const { result } = await ask({ result: { content: [{ type: "text", text: JSON.stringify(rows) }] } });
+    assert.deepEqual(JSON.parse(result.content[0].text), [{ id: "r1", total_ads: 3 }]);
+  });
+
+  await t.test("JSON nested 5000 levels deep neither stops the bridge nor passes unread", { timeout: 10000 }, async () => {
+    const deepList = "[".repeat(5000) + "]".repeat(5000);
+    callClient.input.write(
+      `{"jsonrpc":"2.0","id":${++callId},"method":"tools/call","params":{"name":"${PINNED[0]}","arguments":{"pixel_id":${deepList}}}}\n`
+    );
+    const refused = await toCallClient.next();
+    assert.equal(refused.id, callId);
+    assert.equal(refused.error.code, -32602);
+
+    callClient.input.write(JSON.stringify(call(PINNED[0], SAMPLE_ARGS, ++callId)) + "\n");
+    await toCallServer.next();
+    const deepObject = '{"a":'.repeat(5000) + '"webmaster"' + "}".repeat(5000);
+    const text = JSON.stringify("Found 1 webmaster ad.");
+    callServer.output.write(
+      `{"jsonrpc":"2.0","id":${callId},"result":{"content":[{"type":"text","text":${text}}],"structuredContent":{"data":${deepObject}}}}\n`
+    );
+    const unread = await toCallClient.next();
+    assertClean(unread, "a deep answer");
+    assert.equal(unread.result.isError, true);
+    assert.equal(unread.result.structuredContent, undefined);
+    assert.match(unread.result.content[0].text, /nested too deeply/);
+    assert.equal(unread.result.content[1].text, "Found 1 advertiser ad.");
+
+    // The bridge still answers.
+    const { result } = await ask(answer({ data: [{ id: "r2" }] }));
+    assert.deepEqual(result.structuredContent, { data: [{ id: "r2" }] });
+  });
+
+  await t.test("public names (brand, sponsor, company, page) are quoted as published", () => {
+    const published = {
+      id: "r1",
+      brand: "Webmaster Solutions",
+      vendor: "Webmaster Supply",
+      tt_sponsors: ["Webmaster Media Ltd"],
+      sponsor: "Webmaster Media Ltd",
+      advertiser_name: "Webmaster Academy",
+      display_name: "Webmaster Academy",
+      page_name: "Webmaster Academy",
+      company_name: "Webmaster Holdings",
+      organization: "Webmaster Holdings",
+      payer: "Webmaster Holdings",
+      beneficiary: "Webmaster Holdings",
+      domain: "webmaster-academy.example"
+    };
+    const { structuredContent } = transformToolResult({ structuredContent: { data: [published] } }, adapterConfig.tools[PINNED[0]]);
+    assert.deepEqual(structuredContent.data, [published]);
+  });
+
+  await t.test("_meta of content blocks and text resources are cleaned; media data passes", { timeout: 10000 }, async () => {
+    const image = { type: "image", data: "aGVsbG8=", mimeType: "image/png" };
+    const blob = { type: "resource", resource: { uri: "spytrend://media/1", mimeType: "video/mp4", blob: "aGVsbG8=" } };
+    const { result } = await ask({
+      result: {
+        content: [
+          { type: "text", text: "ok", _meta: { "spytrend/next_step": "Open get_webmaster.", "spytrend/pixel_ids": ["1"] } },
+          { type: "resource", resource: { uri: "spytrend://ad/1", mimeType: "application/json", text: JSON.stringify({ id: "r1", webmaster_id: "w1" }) } },
+          { type: "resource", resource: { uri: "spytrend://note/1", mimeType: "text/plain", text: "A webmaster card." } },
+          { ...image, _meta: { pixel_id: "1" } },
+          blob
+        ]
+      }
+    });
+    assert.deepEqual(result.content[0], { type: "text", text: "ok" });
+    assert.deepEqual(JSON.parse(result.content[1].resource.text), { id: "r1" });
+    assert.equal(result.content[2].resource.text, "An advertiser card.");
+    assert.deepEqual(result.content[3], image);
+    assert.deepEqual(result.content[4], blob);
+  });
+
+  await t.test("server notifications are cleaned; the adapter's own log names only its tools", { timeout: 10000 }, async () => {
+    const log = { jsonrpc: "2.0", method: "notifications/message", params: { level: "info", logger: "spytrend", data: "Use get_webmaster for the webmaster card." } };
+    const progress = { jsonrpc: "2.0", method: "notifications/progress", params: { progressToken: 1, progress: 1, message: "Reading webmaster cards" } };
+    callServer.output.write(JSON.stringify(log) + "\n" + JSON.stringify(progress) + "\n");
+    const notifications = [await toCallClient.next(), await toCallClient.next()];
+    assertClean(notifications, "notifications");
+    assert.equal(notifications[0].params.level, "info");
+    assert.equal(notifications[1].params.message, "Reading advertiser cards");
+
+    const logs = [];
+    const quietClient = { input: new PassThrough(), output: new PassThrough() };
+    const quietServer = { input: new PassThrough(), output: new PassThrough() };
+    const toQuietServer = lines(quietServer.input);
+    const toQuietClient = lines(quietClient.output);
+    createBridge({ config: adapterConfig, client: quietClient, upstream: quietServer, identity: IDENTITY, log: (text) => logs.push(text) });
+    quietClient.input.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) + "\n");
+    await toQuietServer.next();
+    quietServer.output.write(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { tools: [] } }) + "\n");
+    await toQuietClient.next();
+    assert.equal(logs.length, Object.keys(EXPECTED_TOOLS).length);
+    assertClean(logs, "the adapter's log");
+  });
+
+  await t.test("the server word is replaced in every letter case", { timeout: 10000 }, async () => {
+    const { result } = await ask(answer({ data: [{ id: "r1" }], note: "WEBMASTER totals; WebMaster rows; webmaster pages." }));
+    assert.equal(result.structuredContent.note, "ADVERTISER totals; Advertiser rows; advertiser pages.");
+    if (!adapterConfig.vocabulary) return;
+    const shouting = SERVER_TOOLS.map((tool) => ({ ...tool, inputSchema: { ...tool.inputSchema, description: "WEBMASTER ids and WebMaster pages." } }));
+    assert.equal(buildLocalToolList(shouting, adapterConfig)[0].inputSchema.description, "ADVERTISER ids and Advertiser pages.");
+  });
+
+  await t.test("JSON inside a string value and lookalike keys are cleaned too", { timeout: 10000 }, async () => {
+    const row = { id: "r1", extra: JSON.stringify({ webmaster_id: "w1", total_ads: 3 }), "Webmaſter_ID": "w1" };
+    const { result } = await ask(answer({ data: [row] }));
+    assert.deepEqual(result.structuredContent.data, [{ id: "r1", extra: JSON.stringify({ total_ads: 3 }) }]);
+  });
+
+  await t.test("an error whose text block is a JSON list is rewritten like structuredContent.error", { timeout: 10000 }, async () => {
+    const internal = "pixel_id must be numeric.";
+    const failure = refusal(internal, { outcome: "arg_error", code: "invalid_arguments", kind: "invalid_argument" });
+    failure.result.content = [{ type: "text", text: JSON.stringify([internal]) }];
+    const { result } = await ask(failure);
+    assert.deepEqual(JSON.parse(result.content[0].text), [UNAVAILABLE]);
+    assert.equal(result.structuredContent.error.message, UNAVAILABLE);
+  });
+
+  await t.test("notification correlation ids pass byte for byte", { timeout: 10000 }, async () => {
+    const progress = { jsonrpc: "2.0", method: "notifications/progress", params: { progressToken: "webmaster-7", progress: 1, message: "Reading webmaster cards" } };
+    const cancelled = { jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: "webmaster-call-3", reason: "Cancelled the webmaster lookup." } };
+    callServer.output.write(JSON.stringify(progress) + "\n" + JSON.stringify(cancelled) + "\n");
+    const [localProgress, localCancelled] = [await toCallClient.next(), await toCallClient.next()];
+    assert.equal(localProgress.params.progressToken, "webmaster-7");
+    assert.equal(localCancelled.params.requestId, "webmaster-call-3");
+    assert.equal(localProgress.params.message, "Reading advertiser cards");
+    assert.equal(localCancelled.params.reason, "Cancelled the advertiser lookup.");
+  });
+
+  await t.test("links inside a text resource are kept as they are", { timeout: 10000 }, async () => {
+    const text = "Open https://webmaster-tools.example/c?ref=webmaster or write to webmaster@example.com; the webmaster card is below.";
+    const { result } = await askRaw({ result: { content: [{ type: "resource", resource: { uri: "spytrend://note/2", mimeType: "text/plain", text } }] } });
+    assert.equal(result.content[0].resource.text, text.replace("the webmaster card", "the advertiser card"));
+  });
+
+  await t.test("_meta of a resource is cleaned like the _meta of a block", { timeout: 10000 }, async () => {
+    const meta = { "spytrend/next_step": "Open get_webmaster.", "spytrend/pixel_ids": ["1"], "spytrend/outcome": "ok" };
+    const resource = { uri: "spytrend://note/3", mimeType: "text/plain", text: "ok" };
+    const { result } = await ask({ result: { content: [{ type: "resource", resource: { ...resource, _meta: meta } }] } });
+    assert.deepEqual(result.content[0].resource, { ...resource, _meta: { "spytrend/outcome": "ok" } });
+  });
+
+  await t.test("a JSON string in a notification is cleaned as JSON: public names stay, internal keys go", { timeout: 10000 }, async () => {
+    const data = JSON.stringify({ brand: "Webmaster Solutions", name: "Webmaster Academy", webmaster_id: "w1", pixel_ids: ["1"], note: "webmaster cards" });
+    callServer.output.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/message", params: { level: "info", data } }) + "\n");
+    const { params } = await toCallClient.next();
+    assert.deepEqual(JSON.parse(params.data), { brand: "Webmaster Solutions", name: "Webmaster Academy", note: "advertiser cards" });
+  });
+
   assert.ok(checked.length >= 10);
+});
+
+test("what an advertiser published is quoted as is; only server notes are reworded", () => {
+  const row = {
+    id: "a1",
+    title: "Webmaster tools",
+    body: "Hire a webmaster today",
+    link_url: "https://t.example.com/c?pixel_id=12&resolved_ip=1",
+    landing_domain: "webmaster-tools.example"
+  };
+  const payload = { data: [row], note: "Ranked by webmaster activity." };
+  const { structuredContent } = transformToolResult({ structuredContent: payload }, adapterConfig.tools[PINNED[0]]);
+  assert.deepEqual(structuredContent.data, [row]);
+  assert.equal(structuredContent.note, "Ranked by advertiser activity.");
 });
 
 function lines(stream) {

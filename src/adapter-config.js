@@ -14,6 +14,9 @@ const searchProperties = {
 
 // Pixel and IP lookups are internal signals: never published, a call that sets one is refused.
 const internalLookups = ["pixel_id", "resolved_ip"];
+// Ad rows carry the server's own advertiser entities (an id and the entities matched to the ad):
+// internal, not the advertisers this adapter works with. Dropped from every result row.
+const serverAdFields = ["webmaster_id", "webmasters"];
 
 export const adapterConfig = {
   rejectProperties: internalLookups,
@@ -35,6 +38,7 @@ export const adapterConfig = {
       ...pinMeta,
       removeProperties: ["source"],
       rejectProperties: ["webmaster_id"],
+      dropFields: serverAdFields,
       properties: searchProperties,
       // days_active is a TikTok-only sort on the hosted server.
       enums: { sort_by: ["date", "most_popular", "folder_added", "most_reused_creative"] },
@@ -44,6 +48,7 @@ export const adapterConfig = {
     get_facebook_ad: {
       remoteName: "get_ad",
       ...pinMeta,
+      dropFields: serverAdFields,
       properties: { id: "the ad id from `search_facebook_ads`" },
       title: "Get Facebook ad",
       description: "Open one Meta ad by an id from `search_facebook_ads`: ad copy, destination link, run dates and the creative. One token; fifty for a multi-language upload."
@@ -62,6 +67,9 @@ export const adapterConfig = {
     get_facebook_ads_analytics: {
       remoteName: "get_ads_analytics",
       rejectProperties: ["webmaster_id", "favorites_only"],
+      // The server's sixth breakdown groups ads by its own advertiser entities: the section and its rows go.
+      dropFields: ["webmasters"],
+      dropRows: { dimension: ["webmasters"] },
       properties: {
         advertiser_id: "the advertiser id from `search_facebook_advertisers` or from an ad row",
         parsing_geo: "ISO-2 country the ad was collected in",
@@ -72,6 +80,7 @@ export const adapterConfig = {
     },
     find_similar_facebook_ads: {
       remoteName: "find_similar_ads",
+      dropFields: serverAdFields,
       title: "Find related Facebook ads",
       description: "Ads related to a given Meta ad id through the same advertiser page or the same landing domain. Use to see the rest of a campaign. One token per row."
     },

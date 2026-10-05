@@ -97,6 +97,9 @@ token (fifty for multi-language uploads). Details:
   does not bypass any platform access control.
 - Meta, Facebook and Instagram are trademarks of Meta Platforms, Inc. This project is not
   affiliated with, endorsed by or sponsored by Meta Platforms, Inc.
+- Results are the hosted server's answers in this adapter's names: tool and parameter names in errors
+  and parameter notes are this adapter's, and fields the hosted server keeps for its own use are
+  left out. What advertisers published (ad copy, names, links) is passed on as is.
 - For the full server with all 22 tools, six ready-made research workflows and TikTok coverage,
   see the canonical repository: [Spytrend/spytrend-mcp](https://github.com/Spytrend/spytrend-mcp).
 
